@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"os/exec"
@@ -8,6 +9,7 @@ import (
 	"strings"
 
 	"golang.org/x/sys/windows/svc"
+	"golang.org/x/sys/windows/svc/eventlog"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
@@ -17,12 +19,19 @@ const (
 
 type serviceWrapper struct {
 	executable string
+	svcName    string
 	logger     *log.Logger
 }
 
 func (s *serviceWrapper) Execute(args []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (ssec bool, errno uint32) {
 	const cmdsAccepted = svc.AcceptStop | svc.AcceptShutdown
-	changes <- svc.Status{State: svc.StartPending}
+
+	elog, err := eventlog.Open(s.svcName)
+	if err != nil {
+		log.Printf("Failed to open eventlog: %v", err)
+	}
+
+	defer elog.Close()
 
 	//Start the wrapped executable
 	cmd := exec.Command(s.executable)
@@ -30,17 +39,17 @@ func (s *serviceWrapper) Execute(args []string, r <-chan svc.ChangeRequest, chan
 	cmd.Stderr = s.logger.Writer()
 
 	if err := cmd.Start(); err != nil {
-		s.logger.Printf("Failed to start executable: %v", err)
+		elog.Error(1000, fmt.Sprintf("Failed to start service %s: %v", s.svcName, err))
 		return false, 1
 	}
 
 	changes <- svc.Status{State: svc.Running, Accepts: cmdsAccepted}
 
-	//TODO: Here maybe we could writhe to the eventlog that we started?
+	elog.Info(1000, fmt.Sprintf("%v started successfully.", s.svcName))
 
 	go func() {
 		if err := cmd.Wait(); err != nil {
-			s.logger.Printf("Executable exited with error: %v", err)
+			elog.Error(1000, fmt.Sprintf("Service: %s exited with error: %v", s.svcName, err))
 		}
 	}()
 
@@ -54,11 +63,12 @@ func (s *serviceWrapper) Execute(args []string, r <-chan svc.ChangeRequest, chan
 				changes <- svc.Status{State: svc.StopPending}
 				if err := cmd.Process.Kill(); err != nil {
 					//TODO: Could we do this a little nicer?
-					s.logger.Printf("Failed to kill Process: %v", err)
+					elog.Error(1000, fmt.Sprintf("Failed to kill service: %s with error: %v", s.svcName, err))
 				}
+				elog.Info(1000, fmt.Sprintf("%v stoped successfully.", s.svcName))
 				return false, 0
 			default:
-				s.logger.Printf("Unexpected control request: %v", c)
+				elog.Info(1000, fmt.Sprintf("Unexpected control request to service: %s request: %v", s.svcName, c))
 			}
 		}
 	}
@@ -69,34 +79,42 @@ func main() {
 		log.Fatalf("Usage: %s <executable>", os.Args[0])
 	}
 	//TODO: we should definetly check that we are running as a service
-
-	executable := os.Args[1]
-	exeName := filepath.Base(executable)
-	logFile := filepath.Join(LOG_DIR, strings.TrimSuffix(exeName, filepath.Ext(exeName))+".log")
-
-	//Ensure that the directory exists
-	if err := os.MkdirAll(LOG_DIR, 0755); err != nil {
-		log.Fatalf("Failed to create log directory %s: %v", LOG_DIR, err)
+	isService, err := svc.IsWindowsService()
+	if err != nil {
+		log.Fatalf("Failed to check if running as a service: %v", err)
 	}
 
-	//Setup the log rotation
-	logWriter := &lumberjack.Logger{
-		Filename:   logFile,
-		MaxSize:    50, //MB
-		MaxBackups: 10, //Files retained on disk
-		MaxAge:     0,  //No age based deletion
-		Compress:   false,
-	}
+	if isService {
+		executable := os.Args[1]
+		exeName := filepath.Base(executable)
+		logFile := filepath.Join(LOG_DIR, strings.TrimSuffix(exeName, filepath.Ext(exeName))+".log")
 
-	logger := log.New(logWriter, "", log.LstdFlags)
+		//Ensure that the directory exists
+		if err := os.MkdirAll(LOG_DIR, 0755); err != nil {
+			log.Fatalf("Failed to create log directory %s: %v", LOG_DIR, err)
+		}
 
-	svcConfig := &serviceWrapper{
-		executable: executable,
-		logger:     logger,
-	}
+		//Setup the log rotation
+		logWriter := &lumberjack.Logger{
+			Filename:   logFile,
+			MaxSize:    50, //MB
+			MaxBackups: 10, //Files retained on disk
+			MaxAge:     0,  //No age based deletion
+			Compress:   false,
+		}
 
-	svcName := strings.TrimSuffix(exeName, filepath.Ext(exeName))
-	if err := svc.Run(svcName, svcConfig); err != nil {
-		logger.Fatalf("Service failed: %v", err)
+		logger := log.New(logWriter, "", log.LstdFlags)
+
+		svcConfig := &serviceWrapper{
+			executable: executable,
+			svcName:    strings.TrimSuffix(exeName, filepath.Ext(exeName)),
+			logger:     logger,
+		}
+
+		if err := svc.Run(svcConfig.svcName, svcConfig); err != nil {
+			logger.Fatalf("Service failed: %v", err)
+		}
+	} else {
+		log.Println("This program is designed to run as a Windows Service.")
 	}
 }
