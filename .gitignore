@@ -3,3 +3,6 @@
 
 # No bin files
 *.exe
+
+# Temp files
+*~
