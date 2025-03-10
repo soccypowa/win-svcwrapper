@@ -13,3 +13,5 @@ stdout and stderr will be written to a file under c:\logs the filename will cont
 file size is limited to 50MB and 10 files are kept on disk.
 
 This should be developed and built on Windows
+
+Uses: Lumberjack, windows/svc
