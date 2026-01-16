@@ -19,6 +19,7 @@ const (
 
 type serviceWrapper struct {
 	executable string
+	execArgs   []string
 	svcName    string
 	logger     *log.Logger
 }
@@ -33,8 +34,8 @@ func (s *serviceWrapper) Execute(args []string, r <-chan svc.ChangeRequest, chan
 
 	defer elog.Close()
 
-	//Start the wrapped executable
-	cmd := exec.Command(s.executable)
+	//Start the wrapped executable with arguments
+	cmd := exec.Command(s.executable, s.execArgs...)
 	cmd.Stdout = s.logger.Writer()
 	cmd.Stderr = s.logger.Writer()
 
@@ -76,7 +77,7 @@ func (s *serviceWrapper) Execute(args []string, r <-chan svc.ChangeRequest, chan
 
 func main() {
 	if len(os.Args) < 2 {
-		log.Fatalf("Usage: %s <executable>", os.Args[0])
+		log.Fatalf("Usage: %s <executable> [args...]", os.Args[0])
 	}
 	//TODO: we should definetly check that we are running as a service
 	isService, err := svc.IsWindowsService()
@@ -86,6 +87,10 @@ func main() {
 
 	if isService {
 		executable := os.Args[1]
+		execArgs := []string{}
+		if len(os.Args) > 2 {
+			execArgs = os.Args[2:]
+		}
 		exeName := filepath.Base(executable)
 		logFile := filepath.Join(LOG_DIR, strings.TrimSuffix(exeName, filepath.Ext(exeName))+".log")
 
@@ -107,6 +112,7 @@ func main() {
 
 		svcConfig := &serviceWrapper{
 			executable: executable,
+			execArgs:   execArgs,
 			svcName:    strings.TrimSuffix(exeName, filepath.Ext(exeName)),
 			logger:     logger,
 		}
