@@ -2,9 +2,9 @@ tidy:
 	go mod tidy
 
 build:
-	go build -o servicewrapper.exe servicewrapper.go
+	@GOOS='windows' GOARCH='amd64' go build -o build/servicewrapper.exe servicewrapper.go
 
 clean:
-	del .\servicewrapper.exe
+	@rm -rf build
 
 .PHONY: tidy build clean
